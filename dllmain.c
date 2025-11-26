@@ -15,20 +15,121 @@ CRITICAL_SECTION CriticalSection;
 //----------------------------------------------------------------------------------------------------
 
 void putToTextFile(char* dbgString);
+void putToTextFileV4(char* dbgString, INT32 ret, BYTE arg1, BYTE arg2, BYTE arg3, BYTE arg4, char* comment);
 void putToBinaryFile(char* prefix, BYTE* buffer, DWORD len);
+char* deviceControl(INT32 arg);
+char* soundControl(INT32 arg);
 
 //----------------------------------------------------------------------------------------------------
 typedef void (*T_pf_func)(void);
-#define EXPORTED_FUNCTION __declspec(dllexport, naked)
+typedef INT32 (*T_pf_v4_func)(BYTE, BYTE, BYTE, BYTE);
+typedef INT32(*T_pf_v5_func)(INT32, INT32, BYTE, void*, void*);
 
-#define MAKE_POINTER_ONLY(NAME) T_pf_func pf_ ## NAME;
+
+#define EXPORTED_FUNCTION __declspec(dllexport, naked)
+#define EXPORTED_V4_FUNCTION __declspec(dllexport)
+#define EXPORTED_V5_FUNCTION __declspec(dllexport)
 
 #define MAKE_ENTRY(NAME) T_pf_func pf_ ## NAME; \
-EXPORTED_FUNCTION void NAME(void) { putToTextFile(#NAME); __asm { jmp [ pf_ ## NAME ] } }; 
+EXPORTED_FUNCTION void NAME(void) { \
+  putToTextFile(#NAME); \
+  __asm { jmp [ pf_ ## NAME ] } ; \
+}; 
+
+#define MAKE_V4_ENTRY(NAME) T_pf_v4_func pf_ ## NAME; \
+EXPORTED_V4_FUNCTION INT32 NAME(BYTE arg1, BYTE arg2, BYTE arg3, BYTE arg4) { \
+  INT32 out = pf_ ## NAME (arg1, arg2, arg3, arg4); \
+  char* comment = deviceControl(arg1); \
+  putToTextFileV4(#NAME, out, arg1, arg2, arg3, arg4, comment); \
+  return out; \
+}; 
+
+#define MAKE_V5_ENTRY(NAME) T_pf_v5_func pf_ ## NAME; \
+EXPORTED_V5_FUNCTION INT32 NAME(INT32 arg1, INT32 arg2, BYTE arg3, void* arg4, void* arg5) { \
+  INT32 out = pf_ ## NAME (arg1, arg2, arg3, arg4, arg5); \
+  char* comment = soundControl(arg1); \
+  putToTextFileV4(#NAME, out, arg3, 0, 0, 0, comment); \
+  return out; \
+}; 
+
+//----------------------------------------------------------------------------------------------------
+
+char* deviceControl(INT32 arg) {
+  switch (arg) {
+  default:
+    return "???";
+  case 0:
+    return "Pwr mng dig";
+  case 1:
+    return "Pwr mng ana";
+  case 2:
+    return "EQ vol";
+  case 3:
+    return "HP vol";
+  case 4:
+    return "SP vol";
+  case 5:
+    return "LED master";
+  case 6:
+    return "LED blink";
+  case 7:
+    return "LED direct";
+  case 8:
+    return "MTR master";
+  case 9:
+    return "MTR blink";
+  case 10:
+    return "MTR direct";
+  case 11:
+    return "GET PLL";
+  case 13:
+    return "HW init";
+  case 17:
+    return "WR imreg";
+  case 18:
+    return "RD imreg";
+  case 20:
+    return "GET dev type";
+  }
+}
+
+char* soundControl(INT32 arg) {
+  switch (arg) {
+  default:
+    return "???";
+  case 0:
+    return "SET vol";
+  case 1:
+    return "SET speed";
+  case 2:
+    return "SET keyctrl";
+  case 12:
+    return "SET start";
+  case 13:
+    return "SET end";
+  case 14:
+    return "SET pan";
+  case 17:
+    return "SET evt note";
+  case 20:
+    return "SET load info";
+  case 22:
+    return "SET HV voice";
+  case 23:
+    return "SET HV prog nr";
+  case 26:
+    return "SET speed W";
+  case 31:
+    return "SET HV vol";
+  }
+}
+
 
 //----------------------------------------------------------------------------------------------------
 
 #define IMPORT_ENTRY(NAME) pf_ ## NAME = (T_pf_func)GetProcAddress(h_originalDll, #NAME);
+#define IMPORT_V4_ENTRY(NAME) pf_ ## NAME = (T_pf_v4_func)GetProcAddress(h_originalDll, #NAME);
+#define IMPORT_V5_ENTRY(NAME) pf_ ## NAME = (T_pf_v5_func)GetProcAddress(h_originalDll, #NAME);
 
 //----------------------------------------------------------------------------------------------------
 
@@ -38,11 +139,11 @@ MAKE_ENTRY(MaSound_Generate)
 MAKE_ENTRY(MaSound_EmuTerminate)
 MAKE_ENTRY(MaSound_Initialize)
 MAKE_ENTRY(MaSound_Terminate)
-MAKE_ENTRY(MaSound_DeviceControl)
+MAKE_V4_ENTRY(MaSound_DeviceControl)
 MAKE_ENTRY(MaSound_Create)
 MAKE_ENTRY(MaSound_Load)
 MAKE_ENTRY(MaSound_Open)
-MAKE_ENTRY(MaSound_Control)
+MAKE_V5_ENTRY(MaSound_Control)
 MAKE_ENTRY(MaSound_Standby)
 MAKE_ENTRY(MaSound_Seek)
 MAKE_ENTRY(MaSound_Start)
@@ -121,11 +222,11 @@ BOOL APIENTRY DllMain( HMODULE hModule,
         IMPORT_ENTRY(MaSound_EmuTerminate)
         IMPORT_ENTRY(MaSound_Initialize)
         IMPORT_ENTRY(MaSound_Terminate)
-        IMPORT_ENTRY(MaSound_DeviceControl)
+        IMPORT_V4_ENTRY(MaSound_DeviceControl)
         IMPORT_ENTRY(MaSound_Create)
         IMPORT_ENTRY(MaSound_Load)
         IMPORT_ENTRY(MaSound_Open)
-        IMPORT_ENTRY(MaSound_Control)
+        IMPORT_V5_ENTRY(MaSound_Control)
         IMPORT_ENTRY(MaSound_Standby)
         IMPORT_ENTRY(MaSound_Seek)
         IMPORT_ENTRY(MaSound_Start)
@@ -184,12 +285,12 @@ static char newLine[] = { "\n" };
 
 void putToTextFile(char* dbgString)
 {
+  EnterCriticalSection(&CriticalSection);
+
   HANDLE hFile;
   DWORD dwBytesToWrite = (DWORD)strlen(dbgString);
   DWORD dwBytesWritten = 0;
   BOOL bErrorFlag = FALSE;
-
-  EnterCriticalSection(&CriticalSection);
 
   hFile = CreateFile(fileName,
     GENERIC_WRITE,
@@ -222,6 +323,52 @@ void putToTextFile(char* dbgString)
 
   LeaveCriticalSection(&CriticalSection);
 }
+
+void putToTextFileV4(char* dbgString, INT32 ret, BYTE arg1, BYTE arg2, BYTE arg3, BYTE arg4, char* comment)
+{
+  EnterCriticalSection(&CriticalSection);
+
+  HANDLE hFile;
+  DWORD dwBytesToWrite = (DWORD)strlen(dbgString);
+  DWORD dwBytesWritten = 0;
+  BOOL bErrorFlag = FALSE;
+
+  hFile = CreateFile(fileName, // name of the write
+    GENERIC_WRITE,          // open for writing
+    0,                      // do not share
+    NULL,                   // default security
+    OPEN_ALWAYS,
+    FILE_ATTRIBUTE_NORMAL,  // normal file
+    NULL);                  // no attr. template
+
+  if (hFile != INVALID_HANDLE_VALUE)
+  {
+    SetFilePointer(hFile, 0, NULL, FILE_END);
+
+    /*bErrorFlag =*/ WriteFile(
+      hFile,            // open file handle
+      dbgString,        // start of data to write
+      dwBytesToWrite,   // number of bytes to write
+      &dwBytesWritten,  // number of bytes that were written
+      NULL);            // no overlapped structure
+
+    char buff[64];
+    int len = sprintf(buff, ":%02X %02X %02X %02X=%X (%s)\n", arg1, arg2, arg3, arg4, ret, comment);
+
+    /*bErrorFlag =*/ WriteFile(
+      hFile,
+      buff,
+      len,
+      &dwBytesWritten,
+      NULL);
+
+    CloseHandle(hFile);
+  }
+
+  LeaveCriticalSection(&CriticalSection);
+}
+
+
 
 void putToBinaryFile(char* prefix, BYTE* buffer, DWORD len)
 {
